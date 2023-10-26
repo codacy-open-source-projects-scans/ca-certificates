@@ -35,10 +35,10 @@ Name: ca-certificates
 # to have increasing version numbers. However, the new scheme will work, 
 # because all future versions will start with 2013 or larger.)
 
-Version: 2023.2.60_v7.0.306
+Version: 2023.2.62_v7.0.401
 # for Rawhide, please always use release >= 2
 # for Fedora release branches, please use release < 2 (1.0, 1.1, ...)
-Release: 3%{?dist}
+Release: 4%{?dist}
 License: MIT AND GPL-2.0-or-later
 
 URL: https://fedoraproject.org/wiki/CA-Certificates
@@ -404,6 +404,37 @@ fi
 
 
 %changelog
+* Mon Oct 09 2023 Robert Relyea <rrelyea@redhat.com> 2023.2.62_v7.0.401-4
+- update-ca-trust: Fix bug in update-ca-trust so we don't depened on util-unix
+
+* Sat Oct 07 2023 Adam Williamson <awilliam@redhat.com> - 2023.2.62_v7.0.401-3
+- Skip %post if getopt is missing (recent change made update-ca-trust use it)
+
+*Wed Oct 04 2023 Robert Relyea <rrelyea@redhat.com> 2023.2.62_v7.0.401-2
+ - Update to CKBI 2.62_v7.0.401 from NSS 3.93
+   Removing: 
+    # Certificate "Camerfirma Chambers of Commerce Root"
+    # Certificate "Hongkong Post Root CA 1"
+    # Certificate "FNMT-RCM"
+   Adding: 
+    # Certificate "LAWtrust Root CA2 (4096)"
+    # Certificate "Sectigo Public Email Protection Root E46"
+    # Certificate "Sectigo Public Email Protection Root R46"
+    # Certificate "Sectigo Public Server Authentication Root E46"
+    # Certificate "Sectigo Public Server Authentication Root R46"
+    # Certificate "SSL.com TLS RSA Root CA 2022"
+    # Certificate "SSL.com TLS ECC Root CA 2022"
+    # Certificate "SSL.com Client ECC Root CA 2022"
+    # Certificate "SSL.com Client RSA Root CA 2022"
+    # Certificate "Atos TrustedRoot Root CA ECC G2 2020"
+    # Certificate "Atos TrustedRoot Root CA RSA G2 2020"
+    # Certificate "Atos TrustedRoot Root CA ECC TLS 2021"
+    # Certificate "Atos TrustedRoot Root CA RSA TLS 2021"
+    # Certificate "Chambers of Commerce Root"
+
+* Fri Sep 29 2023 Clemens Lang <cllang@redhat.com> - 2023.2.60_v7.0.306-4
+- update-ca-trust: Support --output and non-root operation (rhbz#2241240)
+
 *Thu Sep 07 2023 Robert Relyea <rrelyea@redhat.com> - 2023.2.60_v7.0.306-3
 - update License: field to SPDX
 
