@@ -1,7 +1,6 @@
 %define pkidir %{_sysconfdir}/pki
 %define catrustdir %{_sysconfdir}/pki/ca-trust
 %define classic_tls_bundle ca-bundle.crt
-%define openssl_format_trust_bundle ca-bundle.trust.crt
 %define p11_format_bundle ca-bundle.trust.p11-kit
 %define legacy_default_bundle ca-bundle.legacy.default.crt
 %define legacy_disable_bundle ca-bundle.legacy.disable.crt
@@ -35,10 +34,10 @@ Name: ca-certificates
 # to have increasing version numbers. However, the new scheme will work, 
 # because all future versions will start with 2013 or larger.)
 
-Version: 2024.2.68_v8.0.302
+Version: 2024.2.69_v8.0.401
 # for Rawhide, please always use release >= 2
 # for Fedora release branches, please use release < 2 (1.0, 1.1, ...)
-Release: 5%{?dist}
+Release: 3%{?dist}
 License: MIT AND GPL-2.0-or-later
 
 URL: https://fedoraproject.org/wiki/CA-Certificates
@@ -66,6 +65,7 @@ Source19: README.etcssl
 BuildArch: noarch
 
 Requires(post): bash
+Requires(post): findutils
 Requires(post): grep
 Requires(post): sed
 Requires(post): coreutils
@@ -190,6 +190,7 @@ mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/source/anchors
 mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/source/blocklist
 mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/extracted
 mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/extracted/pem
+mkdir -p -m 555 $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/directory-hash
 mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/extracted/openssl
 mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/extracted/java
 mkdir -p -m 755 $RPM_BUILD_ROOT%{catrustdir}/extracted/edk2
@@ -238,16 +239,61 @@ touch $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/email-ca-bundle.pem
 chmod 444 $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/email-ca-bundle.pem
 touch $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/objsign-ca-bundle.pem
 chmod 444 $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/objsign-ca-bundle.pem
-touch $RPM_BUILD_ROOT%{catrustdir}/extracted/openssl/%{openssl_format_trust_bundle}
-chmod 444 $RPM_BUILD_ROOT%{catrustdir}/extracted/openssl/%{openssl_format_trust_bundle}
 touch $RPM_BUILD_ROOT%{catrustdir}/extracted/%{java_bundle}
 chmod 444 $RPM_BUILD_ROOT%{catrustdir}/extracted/%{java_bundle}
 touch $RPM_BUILD_ROOT%{catrustdir}/extracted/edk2/cacerts.bin
 chmod 444 $RPM_BUILD_ROOT%{catrustdir}/extracted/edk2/cacerts.bin
 
+# Populate %%{catrustdir}/extracted/pem/directory-hash.
+#
+# First direct p11-kit-trust.so to the generated bundle (not the one
+# already present on the build system) with an overriding module
+# config. Note that we have to use a different config path based on
+# the current user: if root, ~/.config/pkcs11/modules/* are not read,
+# while if a regular user, she can't write to /etc.
+if test "$(id -u)" -eq 0; then
+   trust_module_dir=/etc/pkcs11/modules
+else
+   trust_module_dir=$HOME/.config/pkcs11/modules
+fi
+
+mkdir -p "$trust_module_dir"
+
+# It is unlikely that the directory would contain any files on a build system,
+# but let's make sure just in case.
+if [ -n "$(ls -A "$trust_module_dir")" ]; then
+        echo "Directory $trust_module_dir is not empty. Aborting build!"
+        exit 1
+fi
+
+trust_module_config=$trust_module_dir/%{name}-p11-kit-trust.module
+cat >"$trust_module_config" <<EOF
+module: p11-kit-trust.so
+trust-policy: yes
+x-init-reserved: paths='$RPM_BUILD_ROOT%{_datadir}/pki/ca-trust-source'
+EOF
+
+# Extract the trust anchors to the directory-hash format.
+trust extract --format=pem-directory-hash --filter=ca-anchors --overwrite \
+              --purpose server-auth \
+              $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/directory-hash
+
+# Clean up the temporary module config.
+rm -f "$trust_module_config"
+
+find $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/directory-hash -type l \
+     -regextype posix-extended -regex '.*/[0-9a-f]{8}\.[0-9]+' \
+     -exec cp -P {} $RPM_BUILD_ROOT%{pkidir}/tls/certs/ \;
+# Create a temporary file with the list of (%ghost )files in the directory-hash and their copies
+find $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/directory-hash -type f,l > .files.txt
+find $RPM_BUILD_ROOT%{pkidir}/tls/certs -type l -regextype posix-extended \
+     -regex '.*/[0-9a-f]{8}\.[0-9]+' >> .files.txt
+
+sed -i "s|^$RPM_BUILD_ROOT|%ghost /|" .files.txt
+
 # /etc/ssl is provided in a Debian compatible form for (bad) code that
 # expects it: https://bugzilla.redhat.com/show_bug.cgi?id=1053882
-ln -s %{catrustdir}/extracted/pem/directory-hash \
+ln -s %{pkidir}/tls/certs \
     $RPM_BUILD_ROOT%{_sysconfdir}/ssl/certs
 ln -s %{catrustdir}/extracted/pem/tls-ca-bundle.pem \
     $RPM_BUILD_ROOT%{_sysconfdir}/ssl/cert.pem
@@ -258,16 +304,20 @@ ln -s /etc/pki/tls/ct_log_list.cnf \
 # legacy filenames
 ln -s %{catrustdir}/extracted/pem/tls-ca-bundle.pem \
     $RPM_BUILD_ROOT%{pkidir}/tls/cert.pem
-ln -s %{catrustdir}/extracted/pem/tls-ca-bundle.pem \
-    $RPM_BUILD_ROOT%{pkidir}/tls/certs/%{classic_tls_bundle}
-ln -s %{catrustdir}/extracted/openssl/%{openssl_format_trust_bundle} \
-    $RPM_BUILD_ROOT%{pkidir}/tls/certs/%{openssl_format_trust_bundle}
 ln -s %{catrustdir}/extracted/%{java_bundle} \
     $RPM_BUILD_ROOT%{pkidir}/%{java_bundle}
+ln -s %{catrustdir}/extracted/pem/tls-ca-bundle.pem \
+    $RPM_BUILD_ROOT%{pkidir}/tls/certs/%{classic_tls_bundle}
 
+%clean
+/usr/bin/chmod u+w $RPM_BUILD_ROOT%{catrustdir}/extracted/pem/directory-hash
+rm -rf $RPM_BUILD_ROOT
 
 %pre
 if [ $1 -gt 1 ] ; then
+  # Remove the old symlinks
+  rm -f %{pkidir}/tls/certs/ca-bundle.trust.crt
+
   # Upgrade or Downgrade.
   # If the classic filename is a regular file, then we are upgrading
   # from an old package and we will move it to an .rpmsave backup file.
@@ -299,17 +349,6 @@ if [ $1 -gt 1 ] ; then
       fi
     fi
   fi
-
-  if ! test -e %{pkidir}/tls/certs/%{openssl_format_trust_bundle}.rpmsave; then
-    # no backup yet
-    if test -e %{pkidir}/tls/certs/%{openssl_format_trust_bundle}; then
-      # a file exists
-      if ! test -L %{pkidir}/tls/certs/%{openssl_format_trust_bundle}; then
-        # it's an old regular file, not a link
-        mv -f %{pkidir}/tls/certs/%{openssl_format_trust_bundle} %{pkidir}/tls/certs/%{openssl_format_trust_bundle}.rpmsave
-      fi
-    fi
-  fi
 fi
 
 
@@ -338,7 +377,8 @@ fi
 %{_bindir}/ca-legacy install
 %{_bindir}/update-ca-trust
 
-%files
+# The file .files.txt contains the list of (%ghost )files in the directory-hash
+%files -f .files.txt
 %dir %{_sysconfdir}/ssl
 %dir %{pkidir}/tls
 %dir %{pkidir}/tls/certs
@@ -356,6 +396,7 @@ fi
 %dir %{_datadir}/pki/ca-trust-source/anchors
 %dir %{_datadir}/pki/ca-trust-source/blocklist
 %dir %{_datadir}/pki/ca-trust-legacy
+%dir %{catrustdir}/extracted/pem/directory-hash
 
 %config(noreplace) %{catrustdir}/ca-legacy.conf
 
@@ -373,7 +414,6 @@ fi
 # symlinks for old locations
 %{pkidir}/tls/cert.pem
 %{pkidir}/tls/certs/%{classic_tls_bundle}
-%{pkidir}/tls/certs/%{openssl_format_trust_bundle}
 %{pkidir}/%{java_bundle}
 # Hybrid hash directory with bundle file for Debian compatibility
 # See https://bugzilla.redhat.com/show_bug.cgi?id=1053882
@@ -396,12 +436,34 @@ fi
 %ghost %{catrustdir}/extracted/pem/tls-ca-bundle.pem
 %ghost %{catrustdir}/extracted/pem/email-ca-bundle.pem
 %ghost %{catrustdir}/extracted/pem/objsign-ca-bundle.pem
-%ghost %{catrustdir}/extracted/openssl/%{openssl_format_trust_bundle}
 %ghost %{catrustdir}/extracted/%{java_bundle}
 %ghost %{catrustdir}/extracted/edk2/cacerts.bin
 
-
 %changelog
+*Fri Sep 27 2024 Frantisek Krenzelok <fkrenzel@redhat.com> - 2024.2.69_v8.0.401-3
+- Bring back /etc/pki/tls/cert.pem
+
+*Fri Sep 27 2024 Michel Lind <salimma@fedoraproject.org> - 2024.2.69_v8.0.401-2
+- Add missing Requires(post) on findutils for update-ca-trust
+- Fixes: RHBZ#2315320
+
+*Mon Sep 23 2024 Frantisek Krenzelok <fkrenzel@redhat.com> - 2024.2.69_v8.0.401-1
+- Update to CKBI 2.69_v8.0.401 from NSS 3.103
+-    Adding:
+-     # Certificate "Sectigo Public Code Signing Root R46"
+-     # Certificate "Sectigo Public Code Signing Root E46"
+
+*Wed Aug 28 2024 Frantisek Krenzelok <fkrenzel@redhat.com> - 2024.2.69_v8.0.303-5
+- update-ca-trust: copy directory-hash symlinks to /etc/pki/tls/certs
+- Remove /etc/pki/tls/cert.pem symlink so that it isn't loaded by default
+
+*Tue Aug 27 2024 Frantisek Krenzelok <fkrenzel@redhat.com> - 2024.2.69_v8.0.303-5
+- update-ca-trust: return warnings on a unsupported argument instead of error
+
+*Tue Aug 27 2024 Frantisek Krenzelok <fkrenzel@redhat.com> - 2024.2.69_v8.0.303-5
+- Temporarily generate the directory-hash files in %%install ...(next item)
+- Add list of ghost files from directory-hash to %%files
+
 *Mon Jul 29 2024 Frantisek Krenzelok <fkrenzel@redhat.com> - 2024.2.68_v8.0.302-5
 - Add libffi to required packages
 
